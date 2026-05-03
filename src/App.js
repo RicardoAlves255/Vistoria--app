@@ -1,4 +1,31 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+
+// ── Salvar e carregar dados do celular ────────────────────────────────────
+const STORAGE_KEY = "vistoriaapp_dados";
+
+const saveLocal = (data) => {
+  try {
+    // Não salva as fotos em base64 para não lotar a memória
+    const toSave = {
+      ...data,
+      rooms: Object.fromEntries(
+        Object.entries(data.rooms).map(([k, v]) => [k, { ...v, photos: [] }])
+      )
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+  } catch(e) {}
+};
+
+const loadLocal = () => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch(e) { return null; }
+};
+
+const clearLocal = () => {
+  try { localStorage.removeItem(STORAGE_KEY); } catch(e) {}
+};
 
 const ROOMS = [
   "Sala de Estar","Sala de Jantar","Cozinha","Quarto Principal",
@@ -141,10 +168,22 @@ const css = `
 `;
 
 export default function App() {
-  const [s, setS] = useState(INIT);
+  const [s, setS] = useState(() => {
+    const saved = loadLocal();
+    if (saved && saved.brokerName) return { ...INIT, ...saved, rooms: saved.rooms || {}, screen: saved.screen === "relatorio" ? "vistoria" : saved.screen };
+    return INIT;
+  });
+  const [showRestoreMsg, setShowRestoreMsg] = useState(() => {
+    const saved = loadLocal();
+    return !!(saved && saved.brokerName);
+  });
   const [cepLoading, setCepLoading] = useState(false);
+
+  // Salva automaticamente sempre que os dados mudam (sem fotos para economizar espaço)
+  useEffect(() => {
+    if (s.screen !== "home") saveLocal(s);
+  }, [s]);
   const [cepMsg, setCepMsg] = useState({ text: "", type: "" });
-  const [analyzingId, setAnalyzingId] = useState(null);
   const sigRef = useRef(null);
   const sigDrawing = useRef(false);
   const up = (patch) => setS(prev => ({ ...prev, ...patch }));
@@ -180,9 +219,10 @@ export default function App() {
     const room = s.activeRoom;
     if (!room || files.length === 0) return;
     files.forEach(file => {
-      // Comprime para max 1200px e qualidade 75% — reduz 90% do tamanho
       compressImage(file, 1200, 0.75, (src) => {
-        const newPhoto = { id: Date.now() + Math.random(), src, caption: "", aiDesc: "" };
+        const photoId = Date.now() + Math.random();
+        const newPhoto = { id: photoId, src, caption: "", aiDesc: "", analyzing: true };
+        // Salva foto primeiro, depois chama IA
         setS(prev => {
           const existing = prev.rooms[room] || { photos: [], desc: "" };
           return {
@@ -190,7 +230,8 @@ export default function App() {
             rooms: { ...prev.rooms, [room]: { ...existing, photos: [...existing.photos, newPhoto] } }
           };
         });
-        analyzePhoto(newPhoto.id, src, room);
+        // Chama IA após salvar
+        setTimeout(() => analyzePhoto(photoId, src, room), 100);
       });
     });
     e.target.value = "";
@@ -199,10 +240,9 @@ export default function App() {
   // ── IA: analisar foto ────────────────────────────────────────────────────
   const analyzePhoto = async (photoId, src, room) => {
     if (!GEMINI_API_KEY) return;
-    setAnalyzingId(photoId);
     try {
       const base64 = src.split(",")[1];
-      const mediaType = src.split(";")[0].split(":")[1];
+      const mediaType = src.split(";")[0].split(":")[1] || "image/jpeg";
       const response = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
         {
@@ -220,24 +260,42 @@ export default function App() {
       );
       const data = await response.json();
       const desc = (data.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
-      if (desc) {
-        setS(prev => {
-          const roomData = prev.rooms[room];
-          if (!roomData) return prev;
-          return {
-            ...prev,
-            rooms: {
-              ...prev.rooms,
-              [room]: {
-                ...roomData,
-                photos: roomData.photos.map(p => p.id === photoId ? { ...p, aiDesc: desc } : p)
-              }
+      const finalDesc = desc || "Análise indisponível para esta foto.";
+      setS(prev => {
+        const roomData = prev.rooms[room];
+        if (!roomData) return prev;
+        return {
+          ...prev,
+          rooms: {
+            ...prev.rooms,
+            [room]: {
+              ...roomData,
+              photos: roomData.photos.map(p =>
+                p.id === photoId ? { ...p, aiDesc: finalDesc, analyzing: false } : p
+              )
             }
-          };
-        });
-      }
-    } catch (err) { console.error("Erro IA:", err); }
-    setAnalyzingId(null);
+          }
+        };
+      });
+    } catch (err) {
+      console.error("Erro IA:", err);
+      setS(prev => {
+        const roomData = prev.rooms[room];
+        if (!roomData) return prev;
+        return {
+          ...prev,
+          rooms: {
+            ...prev.rooms,
+            [room]: {
+              ...roomData,
+              photos: roomData.photos.map(p =>
+                p.id === photoId ? { ...p, aiDesc: "Erro ao analisar foto.", analyzing: false } : p
+              )
+            }
+          }
+        };
+      });
+    }
   };
 
   const removePhoto = (room, id) => setS(prev => ({
@@ -341,7 +399,19 @@ export default function App() {
               ✅ Laudo PDF profissional — R$ 12,00
             </div>
           </div>
-          <button className="btn btn-gold" onClick={() => up({ screen: "step1" })}>Iniciar Nova Vistoria →</button>
+          {showRestoreMsg && (
+            <div style={{background:'#F0FAF3',border:'1.5px solid #7CB98A55',borderRadius:14,padding:'14px 16px',marginBottom:14,display:'flex',alignItems:'center',justifyContent:'space-between',gap:10}}>
+              <div>
+                <div style={{fontWeight:600,fontSize:13,color:'#2E7D45'}}>📋 Vistoria em andamento</div>
+                <div style={{fontSize:12,color:'#5A8A6A',marginTop:2}}>Seus dados foram recuperados!</div>
+              </div>
+              <button className="btn btn-gold" style={{width:'auto',padding:'9px 16px',fontSize:13}}
+                onClick={() => up({ screen: s.paid ? "vistoria" : "step1" })}>
+                Continuar →
+              </button>
+            </div>
+          )}
+          <button className="btn btn-gold" onClick={() => up({ screen: "step1" })}>Iniciar Nova Vistoria</button>
           {s.paid && <><div className="gap"/><button className="btn btn-ghost" onClick={() => up({ screen: "vistoria" })}>Continuar Vistoria</button></>}
         </div>
       </>}
@@ -570,9 +640,7 @@ export default function App() {
               <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:20,fontWeight:700,color:'#16213E',marginBottom:4}}>
                 📍 {s.activeRoom}
               </div>
-              {GEMINI_API_KEY && (
-                <div className="ai-badge">🤖 IA ativa — análise automática das fotos</div>
-              )}
+              <div className="ai-badge">🤖 IA ativa — análise automática das fotos</div>
               <div className="ig" style={{marginTop:10}}>
                 <label className="lbl">Descrição / Observações</label>
                 <textarea className="ta" value={activeRoomData.desc}
@@ -610,28 +678,22 @@ export default function App() {
                         <button className="photo-del" onClick={() => removePhoto(s.activeRoom, photo.id)}>✕</button>
                       </div>
                       <div className="photo-cap">
-                        {analyzingId === photo.id && (
+                        {photo.analyzing && (
                           <div className="ai-loading">
                             <div className="spinner"/>
                             <span style={{fontSize:12,color:'#B8883A'}}>IA analisando a foto...</span>
                           </div>
                         )}
-                        {photo.aiDesc && analyzingId !== photo.id && (
+                        {!photo.analyzing && (
                           <div style={{marginBottom:6}}>
-                            <div className="ai-result-title" style={{padding:'4px 0 2px'}}>🤖 Descrição da IA (editável)</div>
+                            <div className="ai-result-title" style={{padding:'4px 0 2px'}}>🤖 Descrição (editável)</div>
                             <textarea
                               className="ta"
                               style={{fontSize:12,minHeight:70,padding:'7px 10px'}}
-                              value={photo.aiDesc}
+                              value={photo.aiDesc || ""}
                               onChange={e => updateAiDesc(s.activeRoom, photo.id, e.target.value)}
-                            />
+                              placeholder="Descrição do estado do ambiente..."/>
                           </div>
-                        )}
-                        {!photo.aiDesc && analyzingId !== photo.id && (
-                          <input className="inp" style={{fontSize:12,padding:'6px 10px',marginTop:6}}
-                            value={photo.caption}
-                            onChange={e => updateCaption(s.activeRoom, photo.id, e.target.value)}
-                            placeholder="Adicionar legenda..."/>
                         )}
                       </div>
                     </div>
@@ -752,7 +814,7 @@ export default function App() {
           </div>
           <button className="btn btn-dark no-print" style={{padding:'15px'}} onClick={() => window.print()}>🖨️ Salvar como PDF</button>
           <div className="gap"/>
-          <button className="btn btn-ghost no-print" onClick={() => { setS(INIT); setCepMsg({text:"",type:""}); }}>Nova Vistoria</button>
+          <button className="btn btn-ghost no-print" onClick={() => { setS(INIT); setCepMsg({text:"",type:""}); clearLocal(); setShowRestoreMsg(false); }}>Nova Vistoria</button>
           <div style={{height:24}}/>
         </div>
       </>}
