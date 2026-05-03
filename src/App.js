@@ -15,6 +15,7 @@ const INIT = {
   propCep: "", propRua: "", propNumero: "", propComplemento: "",
   propBairro: "", propCidade: "", propEstado: "", propType: "",
   propDate: new Date().toISOString().split("T")[0],
+  vistoriadorName: "", vistoriadorDoc: "",
   rooms: {}, activeRoom: null, paid: false,
 };
 
@@ -148,26 +149,39 @@ export default function App() {
   const sigDrawing = useRef(false);
   const up = (patch) => setS(prev => ({ ...prev, ...patch }));
 
-  // ── Leitura de arquivo ───────────────────────────────────────────────────
-  const readFile = (file, cb) => {
+  // ── Comprimir imagem antes de salvar ────────────────────────────────────
+  const compressImage = (file, maxW, quality, cb) => {
     const reader = new FileReader();
-    reader.onload = (e) => cb(e.target.result);
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        let w = img.width, h = img.height;
+        if (w > maxW) { h = Math.round(h * maxW / w); w = maxW; }
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
+        cb(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = e.target.result;
+    };
     reader.readAsDataURL(file);
   };
 
   const onLogoChange = (e) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
-    readFile(file, (src) => up({ brokerLogo: src }));
+    compressImage(file, 400, 0.85, (src) => up({ brokerLogo: src }));
   };
 
-  // ── Adicionar fotos ──────────────────────────────────────────────────────
+  // ── Adicionar fotos (com compressão) ────────────────────────────────────
   const addPhotos = (e) => {
     const files = Array.from(e.target.files || []);
     const room = s.activeRoom;
     if (!room || files.length === 0) return;
     files.forEach(file => {
-      readFile(file, (src) => {
+      // Comprime para max 1200px e qualidade 75% — reduz 90% do tamanho
+      compressImage(file, 1200, 0.75, (src) => {
         const newPhoto = { id: Date.now() + Math.random(), src, caption: "", aiDesc: "" };
         setS(prev => {
           const existing = prev.rooms[room] || { photos: [], desc: "" };
@@ -176,7 +190,6 @@ export default function App() {
             rooms: { ...prev.rooms, [room]: { ...existing, photos: [...existing.photos, newPhoto] } }
           };
         });
-        // Analisa automaticamente com IA
         analyzePhoto(newPhoto.id, src, room);
       });
     });
@@ -206,21 +219,23 @@ export default function App() {
         }
       );
       const data = await response.json();
-      const desc = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      setS(prev => {
-        const roomData = prev.rooms[room];
-        if (!roomData) return prev;
-        return {
-          ...prev,
-          rooms: {
-            ...prev.rooms,
-            [room]: {
-              ...roomData,
-              photos: roomData.photos.map(p => p.id === photoId ? { ...p, aiDesc: desc } : p)
+      const desc = (data.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
+      if (desc) {
+        setS(prev => {
+          const roomData = prev.rooms[room];
+          if (!roomData) return prev;
+          return {
+            ...prev,
+            rooms: {
+              ...prev.rooms,
+              [room]: {
+                ...roomData,
+                photos: roomData.photos.map(p => p.id === photoId ? { ...p, aiDesc: desc } : p)
+              }
             }
-          }
-        };
-      });
+          };
+        });
+      }
     } catch (err) { console.error("Erro IA:", err); }
     setAnalyzingId(null);
   };
@@ -233,6 +248,11 @@ export default function App() {
   const updateCaption = (room, id, caption) => setS(prev => ({
     ...prev,
     rooms: { ...prev.rooms, [room]: { ...prev.rooms[room], photos: prev.rooms[room].photos.map(p => p.id === id ? { ...p, caption } : p) } }
+  }));
+
+  const updateAiDesc = (room, id, aiDesc) => setS(prev => ({
+    ...prev,
+    rooms: { ...prev.rooms, [room]: { ...prev.rooms[room], photos: prev.rooms[room].photos.map(p => p.id === id ? { ...p, aiDesc } : p) } }
   }));
 
   const updateDesc = (room, desc) => setS(prev => ({
@@ -456,9 +476,17 @@ export default function App() {
               <label className="lbl">Locador (Proprietário)</label>
               <input className="inp" value={s.locador} onChange={e => up({ locador: e.target.value })} placeholder="Nome completo do proprietário"/>
             </div>
-            <div className="ig" style={{marginBottom:0}}>
+            <div className="ig">
               <label className="lbl">Locatário (Inquilino)</label>
               <input className="inp" value={s.locatario} onChange={e => up({ locatario: e.target.value })} placeholder="Nome completo do inquilino"/>
+            </div>
+            <div className="ig">
+              <label className="lbl">Vistoriador — Nome</label>
+              <input className="inp" value={s.vistoriadorName} onChange={e => up({ vistoriadorName: e.target.value })} placeholder="Nome completo do vistoriador"/>
+            </div>
+            <div className="ig" style={{marginBottom:0}}>
+              <label className="lbl">Vistoriador — CPF / CRECI</label>
+              <input className="inp" value={s.vistoriadorDoc} onChange={e => up({ vistoriadorDoc: e.target.value })} placeholder="CPF ou CRECI do vistoriador"/>
             </div>
           </div>
 
@@ -585,19 +613,26 @@ export default function App() {
                         {analyzingId === photo.id && (
                           <div className="ai-loading">
                             <div className="spinner"/>
-                            <span style={{fontSize:12,color:'#B8883A'}}>IA analisando...</span>
+                            <span style={{fontSize:12,color:'#B8883A'}}>IA analisando a foto...</span>
                           </div>
                         )}
                         {photo.aiDesc && analyzingId !== photo.id && (
-                          <div className="ai-result">
-                            <div className="ai-result-title">🤖 Análise IA</div>
-                            {photo.aiDesc}
+                          <div style={{marginBottom:6}}>
+                            <div className="ai-result-title" style={{padding:'4px 0 2px'}}>🤖 Descrição da IA (editável)</div>
+                            <textarea
+                              className="ta"
+                              style={{fontSize:12,minHeight:70,padding:'7px 10px'}}
+                              value={photo.aiDesc}
+                              onChange={e => updateAiDesc(s.activeRoom, photo.id, e.target.value)}
+                            />
                           </div>
                         )}
-                        <input className="inp" style={{fontSize:12,padding:'6px 10px',marginTop:6}}
-                          value={photo.caption}
-                          onChange={e => updateCaption(s.activeRoom, photo.id, e.target.value)}
-                          placeholder="Adicionar legenda..."/>
+                        {!photo.aiDesc && analyzingId !== photo.id && (
+                          <input className="inp" style={{fontSize:12,padding:'6px 10px',marginTop:6}}
+                            value={photo.caption}
+                            onChange={e => updateCaption(s.activeRoom, photo.id, e.target.value)}
+                            placeholder="Adicionar legenda..."/>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -677,21 +712,38 @@ export default function App() {
           )}
 
           <div className="card">
-            <div style={{fontWeight:600,fontSize:14,marginBottom:4}}>Assinatura Digital</div>
-            <div style={{fontSize:12,color:'#9090A0',marginBottom:12}}>Assine com o dedo ou mouse na área abaixo</div>
-            <div className="sig-wrap">
-              <canvas ref={sigRef} width={420} height={130}
-                onMouseDown={sigStart} onMouseMove={sigMove} onMouseUp={sigEnd} onMouseLeave={sigEnd}
-                onTouchStart={sigStart} onTouchMove={sigMove} onTouchEnd={sigEnd}/>
+            <div style={{fontWeight:700,fontSize:16,marginBottom:4,fontFamily:"'Cormorant Garamond',serif",color:'#16213E'}}>Assinaturas</div>
+            <div style={{fontSize:12,color:'#9090A0',marginBottom:20}}>Campos para assinatura das partes envolvidas</div>
+
+            {/* Locador */}
+            <div style={{marginBottom:24}}>
+              <div style={{fontSize:11,fontWeight:600,color:'#9090A0',textTransform:'uppercase',letterSpacing:'1px',marginBottom:6}}>Locador (Proprietário)</div>
+              <div style={{borderTop:'1.5px solid #16213E',marginBottom:6}}/>
+              <div style={{textAlign:'center',fontSize:13,color:'#7A7A8C'}}>
+                <strong>{s.locador || "________________________________"}</strong><br/>
+                <span style={{fontSize:11}}>Assinatura / Data: ___/___/______</span>
+              </div>
             </div>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:10}}>
-              <button className="btn-clr no-print" onClick={clearSig}>Limpar assinatura</button>
-              <div style={{fontSize:11,color:'#9090A0'}}>{s.brokerName}{s.brokerCreci?` • CRECI ${s.brokerCreci}`:""}</div>
+
+            {/* Locatário */}
+            <div style={{marginBottom:24}}>
+              <div style={{fontSize:11,fontWeight:600,color:'#9090A0',textTransform:'uppercase',letterSpacing:'1px',marginBottom:6}}>Locatário (Inquilino)</div>
+              <div style={{borderTop:'1.5px solid #16213E',marginBottom:6}}/>
+              <div style={{textAlign:'center',fontSize:13,color:'#7A7A8C'}}>
+                <strong>{s.locatario || "________________________________"}</strong><br/>
+                <span style={{fontSize:11}}>Assinatura / Data: ___/___/______</span>
+              </div>
             </div>
-            <div style={{marginTop:16,borderTop:'1.5px solid #16213E',paddingTop:10,textAlign:'center',fontSize:12,color:'#7A7A8C'}}>
-              {s.brokerName||"________________________________"}<br/>
-              {s.brokerCreci?`CRECI: ${s.brokerCreci}`:"CRECI: ________________"}<br/>
-              Data: {new Date(s.propDate+"T12:00:00").toLocaleDateString("pt-BR")}
+
+            {/* Vistoriador */}
+            <div style={{marginBottom:8}}>
+              <div style={{fontSize:11,fontWeight:600,color:'#9090A0',textTransform:'uppercase',letterSpacing:'1px',marginBottom:6}}>Vistoriador</div>
+              <div style={{borderTop:'1.5px solid #16213E',marginBottom:6}}/>
+              <div style={{textAlign:'center',fontSize:13,color:'#7A7A8C'}}>
+                <strong>{s.vistoriadorName || "________________________________"}</strong><br/>
+                {s.vistoriadorDoc && <span style={{fontSize:11}}>CPF/CRECI: {s.vistoriadorDoc}<br/></span>}
+                <span style={{fontSize:11}}>Assinatura / Data: ___/___/______</span>
+              </div>
             </div>
           </div>
 
