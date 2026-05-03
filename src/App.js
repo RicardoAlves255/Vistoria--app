@@ -18,6 +18,9 @@ const INIT = {
   rooms: {}, activeRoom: null, paid: false,
 };
 
+// ── Chave da API Google Gemini (gratuita) ─────────────────────────────────
+const GEMINI_API_KEY = "AIzaSyBr50wIThe5rdHpwqr2BX6Q1MyALATVBwg";
+
 const css = `
   @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Jost:wght@300;400;500;600&display=swap');
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -83,16 +86,35 @@ const css = `
   .chip.active { background: #16213E; color: #fff; border-color: #16213E; }
   .chip.has { border-color: #7CB98A; color: #2E7D45; background: #F0FAF3; }
   .chip.active.has { background: #2E7D45; border-color: #2E7D45; color: #fff; }
-  .photo-label { display: block; cursor: pointer; margin-top: 14px; }
-  .photo-label input[type=file] { display: none; }
-  .photo-box { border: 2px dashed #D4A85366; border-radius: 14px; padding: 22px; text-align: center; background: #FDF9F2; transition: all 0.2s; }
-  .photo-box:hover { background: #FAF3E4; border-color: #D4A853; }
+
+  /* BOTÕES DE FOTO */
+  .photo-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+  .photo-btn-label { display: block; cursor: pointer; }
+  .photo-btn-label input[type=file] { display: none; }
+  .photo-btn { border-radius: 12px; padding: 16px 10px; text-align: center; border: 2px solid transparent; transition: all 0.2s; }
+  .photo-btn-cam { background: linear-gradient(135deg, #16213E, #0F3460); color: #fff; }
+  .photo-btn-cam:hover { opacity: 0.9; }
+  .photo-btn-gal { background: #FDF9F2; border: 2px dashed #D4A85366; color: #B8883A; }
+  .photo-btn-gal:hover { background: #FAF3E4; }
+  .photo-btn-icon { font-size: 28px; display: block; margin-bottom: 6px; }
+  .photo-btn-txt { font-size: 13px; font-weight: 600; display: block; }
+  .photo-btn-sub { font-size: 11px; opacity: 0.75; margin-top: 2px; display: block; }
+
   .photo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
   .photo-item { border-radius: 12px; overflow: hidden; border: 1.5px solid #E2DDD5; background: #fff; }
   .photo-item img { width: 100%; aspect-ratio: 4/3; object-fit: cover; display: block; }
   .photo-cap { padding: 7px 8px; }
   .photo-wrap { position: relative; }
   .photo-del { position: absolute; top: 5px; right: 5px; background: #00000088; color: #fff; border: none; border-radius: 50%; width: 26px; height: 26px; cursor: pointer; font-size: 13px; display: flex; align-items: center; justify-content: center; }
+
+  /* IA BADGE */
+  .ai-badge { display: inline-flex; align-items: center; gap: 5px; background: #F0F0FF; border: 1px solid #C0C0FF; color: #5050CC; border-radius: 20px; padding: 3px 10px; font-size: 11px; font-weight: 600; margin-bottom: 8px; }
+  .ai-loading { background: #FDF9F2; border: 1.5px solid #D4A85344; border-radius: 10px; padding: 12px; margin-top: 8px; display: flex; align-items: center; gap: 10px; }
+  .ai-result { background: #F0FAF3; border: 1.5px solid #7CB98A55; border-radius: 10px; padding: 12px; margin-top: 8px; font-size: 13px; color: #2A5A3A; line-height: 1.6; }
+  .ai-result-title { font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #2E7D45; margin-bottom: 6px; display: flex; align-items: center; gap: 5px; }
+  .spinner { width: 18px; height: 18px; border: 2px solid #D4A85344; border-top-color: #D4A853; border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
   .sig-wrap { border: 1.5px solid #DDD9D0; border-radius: 12px; overflow: hidden; background: #FAFAF8; touch-action: none; cursor: crosshair; }
   .sig-wrap canvas { display: block; width: 100%; height: 130px; }
   .rpt-header { background: #16213E; border-radius: 18px; padding: 22px; margin-bottom: 22px; color: #fff; }
@@ -102,6 +124,7 @@ const css = `
   .rpt-room { margin-bottom: 22px; }
   .rpt-room-ttl { font-family: 'Cormorant Garamond', serif; font-size: 19px; font-weight: 700; color: #16213E; padding-bottom: 8px; border-bottom: 2px solid #D4A85333; margin-bottom: 10px; }
   .rpt-room-desc { font-size: 13px; color: #7A7A8C; font-style: italic; margin-bottom: 10px; }
+  .rpt-ai-desc { font-size: 12px; color: #2A5A3A; background: #F0FAF3; border-left: 3px solid #7CB98A; padding: 8px 12px; border-radius: 0 8px 8px 0; margin-bottom: 10px; }
   .success-wrap { text-align: center; padding: 30px 0 20px; }
   .cep-row { display: flex; gap: 8px; }
   .cep-row .inp { flex: 1; }
@@ -120,11 +143,12 @@ export default function App() {
   const [s, setS] = useState(INIT);
   const [cepLoading, setCepLoading] = useState(false);
   const [cepMsg, setCepMsg] = useState({ text: "", type: "" });
+  const [analyzingId, setAnalyzingId] = useState(null);
   const sigRef = useRef(null);
   const sigDrawing = useRef(false);
   const up = (patch) => setS(prev => ({ ...prev, ...patch }));
 
-  // ── Logo ─────────────────────────────────────────────────────────────────
+  // ── Leitura de arquivo ───────────────────────────────────────────────────
   const readFile = (file, cb) => {
     const reader = new FileReader();
     reader.onload = (e) => cb(e.target.result);
@@ -137,44 +161,78 @@ export default function App() {
     readFile(file, (src) => up({ brokerLogo: src }));
   };
 
-  // ── Photos ───────────────────────────────────────────────────────────────
-  const onPhotoChange = (e) => {
+  // ── Adicionar fotos ──────────────────────────────────────────────────────
+  const addPhotos = (e) => {
     const files = Array.from(e.target.files || []);
     const room = s.activeRoom;
     if (!room || files.length === 0) return;
     files.forEach(file => {
       readFile(file, (src) => {
+        const newPhoto = { id: Date.now() + Math.random(), src, caption: "", aiDesc: "" };
         setS(prev => {
           const existing = prev.rooms[room] || { photos: [], desc: "" };
           return {
             ...prev,
-            rooms: {
-              ...prev.rooms,
-              [room]: {
-                ...existing,
-                photos: [...existing.photos, { id: Date.now() + Math.random(), src, caption: "" }]
-              }
-            }
+            rooms: { ...prev.rooms, [room]: { ...existing, photos: [...existing.photos, newPhoto] } }
           };
         });
+        // Analisa automaticamente com IA
+        analyzePhoto(newPhoto.id, src, room);
       });
     });
+    e.target.value = "";
+  };
+
+  // ── IA: analisar foto ────────────────────────────────────────────────────
+  const analyzePhoto = async (photoId, src, room) => {
+    if (!GEMINI_API_KEY) return;
+    setAnalyzingId(photoId);
+    try {
+      const base64 = src.split(",")[1];
+      const mediaType = src.split(";")[0].split(":")[1];
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{
+              parts: [
+                { inline_data: { mime_type: mediaType, data: base64 } },
+                { text: `Você é um vistoriador de imóveis profissional. Analise esta foto do cômodo "${room}" e descreva em 2-3 frases curtas: o estado geral, acabamentos, e qualquer problema visível. Seja objetivo e técnico. Responda apenas a descrição, sem introdução.` }
+              ]
+            }]
+          })
+        }
+      );
+      const data = await response.json();
+      const desc = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      setS(prev => {
+        const roomData = prev.rooms[room];
+        if (!roomData) return prev;
+        return {
+          ...prev,
+          rooms: {
+            ...prev.rooms,
+            [room]: {
+              ...roomData,
+              photos: roomData.photos.map(p => p.id === photoId ? { ...p, aiDesc: desc } : p)
+            }
+          }
+        };
+      });
+    } catch (err) { console.error("Erro IA:", err); }
+    setAnalyzingId(null);
   };
 
   const removePhoto = (room, id) => setS(prev => ({
     ...prev,
-    rooms: {
-      ...prev.rooms,
-      [room]: { ...prev.rooms[room], photos: prev.rooms[room].photos.filter(p => p.id !== id) }
-    }
+    rooms: { ...prev.rooms, [room]: { ...prev.rooms[room], photos: prev.rooms[room].photos.filter(p => p.id !== id) } }
   }));
 
   const updateCaption = (room, id, caption) => setS(prev => ({
     ...prev,
-    rooms: {
-      ...prev.rooms,
-      [room]: { ...prev.rooms[room], photos: prev.rooms[room].photos.map(p => p.id === id ? { ...p, caption } : p) }
-    }
+    rooms: { ...prev.rooms, [room]: { ...prev.rooms[room], photos: prev.rooms[room].photos.map(p => p.id === id ? { ...p, caption } : p) } }
   }));
 
   const updateDesc = (room, desc) => setS(prev => ({
@@ -198,13 +256,13 @@ export default function App() {
       if (data.erro) { setCepMsg({ text: "CEP não encontrado", type: "err" }); }
       else {
         up({ propRua: data.logradouro || "", propBairro: data.bairro || "", propCidade: data.localidade || "", propEstado: data.uf || "" });
-        setCepMsg({ text: "✅ Endereço preenchido automaticamente!", type: "ok" });
+        setCepMsg({ text: "✅ Endereço preenchido!", type: "ok" });
       }
     } catch { setCepMsg({ text: "Erro ao buscar. Preencha manualmente.", type: "err" }); }
     setCepLoading(false);
   };
 
-  // ── Signature ────────────────────────────────────────────────────────────
+  // ── Assinatura ───────────────────────────────────────────────────────────
   const getXY = (e) => {
     const c = sigRef.current;
     const rect = c.getBoundingClientRect();
@@ -221,7 +279,6 @@ export default function App() {
   const sigEnd = () => { sigDrawing.current = false; };
   const clearSig = () => { const c = sigRef.current; if(c) c.getContext("2d").clearRect(0,0,c.width,c.height); };
 
-  // ── Derived ──────────────────────────────────────────────────────────────
   const totalPhotos = Object.values(s.rooms).reduce((a, r) => a + r.photos.length, 0);
   const activeRoomData = s.activeRoom ? (s.rooms[s.activeRoom] || { photos: [], desc: "" }) : null;
   const fullAddress = [s.propRua, s.propNumero, s.propComplemento, s.propBairro, s.propCidade, s.propEstado, s.propCep ? `CEP ${s.propCep}` : ""].filter(Boolean).join(", ");
@@ -232,7 +289,6 @@ export default function App() {
       {s.paid && <div className="hdr-badge">✓ Ativo</div>}
     </div>
   );
-
   const Steps = ({ active }) => (
     <div className="steps">{[0,1,2].map(i => <div key={i} className={`step-dot${i<=active?" on":""}`}/>)}</div>
   );
@@ -248,16 +304,17 @@ export default function App() {
           <div className="hero">
             <div className="hero-tag">🏠 Imóveis</div>
             <div className="hero-ttl">Vistoria <span>Fotográfica</span><br/>Profissional</div>
-            <div className="hero-p">Fotografe, organize por cômodo e gere laudos PDF em minutos.</div>
+            <div className="hero-p">Fotografe, organize por cômodo e gere laudos PDF com análise de IA.</div>
           </div>
           <div className="stats">
             <div className="stat"><div className="stat-n">PDF</div><div className="stat-l">Relatório</div></div>
-            <div className="stat"><div className="stat-n">∞</div><div className="stat-l">Fotos</div></div>
+            <div className="stat"><div className="stat-n">🤖</div><div className="stat-l">IA</div></div>
             <div className="stat"><div className="stat-n">5'</div><div className="stat-l">Rápido</div></div>
           </div>
           <div className="card" style={{marginBottom:20}}>
             <div style={{fontSize:13,color:'#7A7A8C',lineHeight:2}}>
-              ✅ Fotos organizadas por cômodo<br/>
+              ✅ Câmera direta ou galeria<br/>
+              ✅ IA analisa o estado de cada ambiente<br/>
               ✅ Dados completos do contrato<br/>
               ✅ Busca automática pelo CEP<br/>
               ✅ Logo e assinatura digital<br/>
@@ -269,7 +326,7 @@ export default function App() {
         </div>
       </>}
 
-      {/* ══ STEP 1 — PLANO ══ */}
+      {/* ══ STEP 1 ══ */}
       {s.screen === "step1" && <>
         <Header sub="Plano"/>
         <div className="pg">
@@ -282,14 +339,15 @@ export default function App() {
               <div className="plan-icon">📋</div>
               <div style={{flex:1}}>
                 <div style={{fontWeight:600,fontSize:15}}>Vistoria Avulsa</div>
-                <div style={{fontSize:12,color:'#9090A0',marginTop:2}}>Laudo PDF com fotos e assinatura</div>
+                <div style={{fontSize:12,color:'#9090A0',marginTop:2}}>Laudo PDF + análise de IA por ambiente</div>
               </div>
               <div className="plan-price">R$ 12,00</div>
             </div>
           </div>
           <div className="card">
             <div style={{fontSize:13,color:'#7A7A8C',lineHeight:1.9}}>
-              ✅ Fotos por cômodo<br/>
+              ✅ Câmera + galeria<br/>
+              ✅ IA descreve o estado do imóvel<br/>
               ✅ Dados completos do contrato<br/>
               ✅ Logo e assinatura digital<br/>
               ✅ Relatório PDF profissional
@@ -300,7 +358,7 @@ export default function App() {
         </div>
       </>}
 
-      {/* ══ STEP 2 — DADOS DO CORRETOR ══ */}
+      {/* ══ STEP 2 ══ */}
       {s.screen === "step2" && <>
         <Header sub="Seus Dados"/>
         <div className="pg">
@@ -309,25 +367,17 @@ export default function App() {
           <div className="ttl">Seus Dados</div>
           <div className="sub">Aparecem no cabeçalho do relatório</div>
           <div className="card">
-
-            {/* LOGO — label wrapping input, sem ref */}
             <div className="ig">
               <label className="lbl">Logo da Imobiliária (opcional)</label>
               <label className="file-upload-label">
                 <input type="file" accept="image/*" onChange={onLogoChange}/>
                 <div className="logo-box">
-                  {s.brokerLogo
-                    ? <img src={s.brokerLogo} className="logo-preview" alt="logo"/>
-                    : <div style={{fontSize:44,marginBottom:6}}>🏢</div>
-                  }
-                  <div style={{fontSize:13,color:'#9090A0'}}>
-                    {s.brokerLogo ? "✅ Logo carregada!" : "Toque aqui para escolher o logo"}
-                  </div>
+                  {s.brokerLogo ? <img src={s.brokerLogo} className="logo-preview" alt="logo"/> : <div style={{fontSize:44,marginBottom:6}}>🏢</div>}
+                  <div style={{fontSize:13,color:'#9090A0'}}>{s.brokerLogo ? "✅ Logo carregada!" : "Toque aqui para escolher o logo"}</div>
                   <div className="upload-cta">{s.brokerLogo ? "🔄 Trocar" : "📁 Escolher arquivo"}</div>
                 </div>
               </label>
             </div>
-
             <div className="ig">
               <label className="lbl">Nome / Imobiliária</label>
               <input className="inp" value={s.brokerName} onChange={e => up({ brokerName: e.target.value })} placeholder="Ex: João Silva Imóveis"/>
@@ -341,7 +391,7 @@ export default function App() {
         </div>
       </>}
 
-      {/* ══ STEP 3 — PAGAMENTO ══ */}
+      {/* ══ STEP 3 ══ */}
       {s.screen === "step3" && <>
         <Header sub="Pagamento"/>
         <div className="pg">
@@ -351,8 +401,7 @@ export default function App() {
           <div className="sub">Pague via PIX para liberar a vistoria</div>
           <div className="card">
             <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
-              <span style={{color:'#7A7A8C',fontSize:14}}>Plano</span>
-              <strong>Vistoria Avulsa</strong>
+              <span style={{color:'#7A7A8C',fontSize:14}}>Plano</span><strong>Vistoria Avulsa</strong>
             </div>
             <div style={{display:'flex',justifyContent:'space-between'}}>
               <span style={{color:'#7A7A8C',fontSize:14}}>Total</span>
@@ -421,11 +470,8 @@ export default function App() {
               <div className="cep-row">
                 <input className="inp" value={s.propCep} maxLength={9}
                   onChange={e => { up({ propCep: e.target.value }); setCepMsg({ text:"", type:"" }); }}
-                  placeholder="00000-000"
-                  onKeyDown={e => e.key === "Enter" && buscarCep()}/>
-                <button className="btn-cep" disabled={cepLoading} onClick={buscarCep}>
-                  {cepLoading ? "..." : "Buscar"}
-                </button>
+                  placeholder="00000-000" onKeyDown={e => e.key==="Enter" && buscarCep()}/>
+                <button className="btn-cep" disabled={cepLoading} onClick={buscarCep}>{cepLoading ? "..." : "Buscar"}</button>
               </div>
               {cepMsg.text && <div className={`cep-msg cep-${cepMsg.type||"ok"}`}>{cepMsg.text}</div>}
             </div>
@@ -482,10 +528,9 @@ export default function App() {
             {ROOMS.map(r => {
               const has = (s.rooms[r]?.photos?.length || 0) > 0;
               const active = s.activeRoom === r;
-              let cls = "chip" + (active ? " active" : "") + (has ? " has" : "");
               return (
-                <span key={r} className={cls} onClick={() => selectRoom(r)}>
-                  {has ? "✓ " : ""}{r}{has ? ` (${s.rooms[r].photos.length})` : ""}
+                <span key={r} className={`chip${active?" active":""}${has?" has":""}`} onClick={() => selectRoom(r)}>
+                  {has?"✓ ":""}{r}{has?` (${s.rooms[r].photos.length})`:""}
                 </span>
               );
             })}
@@ -494,26 +539,40 @@ export default function App() {
           {/* CÔMODO ATIVO */}
           {s.activeRoom && activeRoomData && (
             <div className="card">
-              <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:20,fontWeight:700,color:'#16213E',marginBottom:12}}>
+              <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:20,fontWeight:700,color:'#16213E',marginBottom:4}}>
                 📍 {s.activeRoom}
               </div>
-              <div className="ig">
+              {GEMINI_API_KEY && (
+                <div className="ai-badge">🤖 IA ativa — análise automática das fotos</div>
+              )}
+              <div className="ig" style={{marginTop:10}}>
                 <label className="lbl">Descrição / Observações</label>
                 <textarea className="ta" value={activeRoomData.desc}
                   onChange={e => updateDesc(s.activeRoom, e.target.value)}
                   placeholder="Estado geral, itens presentes, defeitos..."/>
               </div>
 
-              {/* FOTOS — label wrapping input, sem ref */}
-              <label className="photo-label">
-                <input type="file" accept="image/*" multiple onChange={onPhotoChange}/>
-                <div className="photo-box">
-                  <div style={{fontSize:36,marginBottom:6}}>📷</div>
-                  <div style={{fontWeight:600,fontSize:14,color:'#B8883A'}}>Toque para adicionar fotos</div>
-                  <div style={{fontSize:12,color:'#B0A090',marginTop:4}}>JPG, PNG — múltiplas fotos</div>
-                </div>
-              </label>
+              {/* BOTÕES DE CÂMERA E GALERIA */}
+              <div className="photo-actions">
+                <label className="photo-btn-label">
+                  <input type="file" accept="image/*" capture="environment" onChange={addPhotos}/>
+                  <div className="photo-btn photo-btn-cam">
+                    <span className="photo-btn-icon">📷</span>
+                    <span className="photo-btn-txt">Tirar Foto</span>
+                    <span className="photo-btn-sub">Abrir câmera</span>
+                  </div>
+                </label>
+                <label className="photo-btn-label">
+                  <input type="file" accept="image/*" multiple onChange={addPhotos}/>
+                  <div className="photo-btn photo-btn-gal">
+                    <span className="photo-btn-icon">🖼️</span>
+                    <span className="photo-btn-txt">Galeria</span>
+                    <span className="photo-btn-sub">Escolher fotos</span>
+                  </div>
+                </label>
+              </div>
 
+              {/* FOTOS */}
               {activeRoomData.photos.length > 0 && (
                 <div className="photo-grid">
                   {activeRoomData.photos.map(photo => (
@@ -523,10 +582,22 @@ export default function App() {
                         <button className="photo-del" onClick={() => removePhoto(s.activeRoom, photo.id)}>✕</button>
                       </div>
                       <div className="photo-cap">
-                        <input className="inp" style={{fontSize:12,padding:'6px 10px'}}
+                        {analyzingId === photo.id && (
+                          <div className="ai-loading">
+                            <div className="spinner"/>
+                            <span style={{fontSize:12,color:'#B8883A'}}>IA analisando...</span>
+                          </div>
+                        )}
+                        {photo.aiDesc && analyzingId !== photo.id && (
+                          <div className="ai-result">
+                            <div className="ai-result-title">🤖 Análise IA</div>
+                            {photo.aiDesc}
+                          </div>
+                        )}
+                        <input className="inp" style={{fontSize:12,padding:'6px 10px',marginTop:6}}
                           value={photo.caption}
                           onChange={e => updateCaption(s.activeRoom, photo.id, e.target.value)}
-                          placeholder="Legenda..."/>
+                          placeholder="Adicionar legenda..."/>
                       </div>
                     </div>
                   ))}
@@ -559,7 +630,6 @@ export default function App() {
             <button className="btn btn-dark" style={{flex:1,padding:'12px'}} onClick={() => window.print()}>🖨️ Salvar como PDF</button>
           </div>
 
-          {/* Cabeçalho */}
           <div className="rpt-header">
             <div style={{display:'flex',alignItems:'center',gap:14,marginBottom:14}}>
               {s.brokerLogo && <img src={s.brokerLogo} style={{width:56,height:56,borderRadius:10,objectFit:'contain',background:'#fff',padding:4}} alt="logo"/>}
@@ -570,16 +640,14 @@ export default function App() {
             </div>
             <div style={{height:1,background:'#D4A85330',marginBottom:14}}/>
             <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:26,fontWeight:700,marginBottom:12}}>Laudo de Vistoria</div>
-
             <div className="rpt-grid">
               {s.contractNumber && <div className="rpt-field"><strong>Nº Contrato</strong><span>{s.contractNumber}</span></div>}
-              {s.startDate && <div className="rpt-field"><strong>Início do Contrato</strong><span>{new Date(s.startDate+"T12:00:00").toLocaleDateString("pt-BR")}</span></div>}
+              {s.startDate && <div className="rpt-field"><strong>Início Contrato</strong><span>{new Date(s.startDate+"T12:00:00").toLocaleDateString("pt-BR")}</span></div>}
               {s.locador && <div className="rpt-field"><strong>Locador</strong><span>{s.locador}</span></div>}
               {s.locatario && <div className="rpt-field"><strong>Locatário</strong><span>{s.locatario}</span></div>}
               {s.propType && <div className="rpt-field"><strong>Tipo</strong><span>{s.propType}</span></div>}
-              <div className="rpt-field"><strong>Data da Vistoria</strong><span>{new Date(s.propDate+"T12:00:00").toLocaleDateString("pt-BR")}</span></div>
+              <div className="rpt-field"><strong>Data Vistoria</strong><span>{new Date(s.propDate+"T12:00:00").toLocaleDateString("pt-BR")}</span></div>
             </div>
-
             {fullAddress && (
               <div style={{marginTop:14,padding:'10px 14px',background:'#ffffff18',borderRadius:10,fontSize:13,color:'#C0CFDF'}}>
                 📍 {fullAddress}
@@ -587,7 +655,6 @@ export default function App() {
             )}
           </div>
 
-          {/* Cômodos */}
           {Object.entries(s.rooms).map(([room, data]) =>
             data.photos.length > 0 && (
               <div key={room} className="rpt-room">
@@ -597,6 +664,9 @@ export default function App() {
                   {data.photos.map(photo => (
                     <div key={photo.id} className="photo-item">
                       <img src={photo.src} alt={photo.caption||room}/>
+                      {photo.aiDesc && (
+                        <div className="rpt-ai-desc">🤖 {photo.aiDesc}</div>
+                      )}
                       {photo.caption && <div style={{padding:'6px 8px',fontSize:12,color:'#7A7A8C',background:'#F8F6F1'}}>{photo.caption}</div>}
                     </div>
                   ))}
@@ -606,7 +676,6 @@ export default function App() {
             )
           )}
 
-          {/* Assinatura */}
           <div className="card">
             <div style={{fontWeight:600,fontSize:14,marginBottom:4}}>Assinatura Digital</div>
             <div style={{fontSize:12,color:'#9090A0',marginBottom:12}}>Assine com o dedo ou mouse na área abaixo</div>
@@ -617,11 +686,11 @@ export default function App() {
             </div>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:10}}>
               <button className="btn-clr no-print" onClick={clearSig}>Limpar assinatura</button>
-              <div style={{fontSize:11,color:'#9090A0'}}>{s.brokerName}{s.brokerCreci ? ` • CRECI ${s.brokerCreci}` : ""}</div>
+              <div style={{fontSize:11,color:'#9090A0'}}>{s.brokerName}{s.brokerCreci?` • CRECI ${s.brokerCreci}`:""}</div>
             </div>
             <div style={{marginTop:16,borderTop:'1.5px solid #16213E',paddingTop:10,textAlign:'center',fontSize:12,color:'#7A7A8C'}}>
               {s.brokerName||"________________________________"}<br/>
-              {s.brokerCreci ? `CRECI: ${s.brokerCreci}` : "CRECI: ________________"}<br/>
+              {s.brokerCreci?`CRECI: ${s.brokerCreci}`:"CRECI: ________________"}<br/>
               Data: {new Date(s.propDate+"T12:00:00").toLocaleDateString("pt-BR")}
             </div>
           </div>
